@@ -10,6 +10,9 @@ classdef stt < proto.ProtoObj
         trial_since_switch = 0
         a_completed_trials = 0
         b_completed_trials = 0
+        counted_trials = 0
+        trial_started = false
+        trial_number = NaN
         switch_after_trial = NaN
         a_hit_history = []
         trial_timing = struct()
@@ -19,6 +22,9 @@ classdef stt < proto.ProtoObj
         timeout_state = ''
         a_consistent_error = false
         restart_count = 0
+        error_count = 0
+        error_poke_ports = {}
+        error_poke_steps = []
         wrong_poke_ports = {}
         wrong_poke_steps = []
         clean_hit = false
@@ -92,6 +98,7 @@ classdef stt < proto.ProtoObj
             obj.b_condition = s.b_condition;
             obj.a_completed_trials = s.a_completed_trials;
             obj.b_completed_trials = s.b_completed_trials;
+            obj.counted_trials = s.a_completed_trials + s.b_completed_trials;
             obj.a_hit_history = s.a_hit_history;
             obj.switch_after_trial = s.switch_after_trial;
             fprintf('STT session: %s, phase %s, B condition %s, switch after %d A trials.\n', ...
@@ -122,6 +129,11 @@ classdef stt < proto.ProtoObj
             obj.timeout_state = '';
             obj.a_consistent_error = false;
             obj.restart_count = 0;
+            obj.error_count = 0;
+            obj.error_poke_ports = {};
+            obj.error_poke_steps = [];
+            obj.trial_started = false;
+            obj.trial_number = NaN;
             obj.wrong_poke_ports = {};
             obj.wrong_poke_steps = [];
             obj.clean_hit = false;
@@ -193,6 +205,12 @@ classdef stt < proto.ProtoObj
             [obj.poke_times,obj.poke_types] = ana.getAllPokes(p);
             hit_time = stt.firstEntry(p,'RewardDelivery');
             timeout_time = stt.firstEntry(p,'TrialTimeOut');
+            % A behavioral trial begins only when the center port is poked.
+            obj.trial_started = isfinite(stt.firstEntry(p,'StartInterval'));
+            if obj.trial_started
+                obj.counted_trials = obj.counted_trials + 1;
+                obj.trial_number = obj.counted_trials;
+            end
             if isfield(p.States,'Violation')
                 visits = p.States.Violation;
                 violation_times = visits(isfinite(visits(:,1)),1);
@@ -206,10 +224,24 @@ classdef stt < proto.ProtoObj
                 obj.wrong_poke_ports{k} = stt.pokeAtTime( ...
                     obj.poke_times,obj.poke_types,violation_times(k));
                 obj.wrong_poke_steps(k) = stt.priorStep(p,violation_times(k));
-                if strcmp(obj.trial_phase,'B') && isfinite(obj.wrong_poke_steps(k)) ...
-                        && obj.wrong_poke_steps(k)<=3 ...
+                % A wrong port during an interval belongs to its upcoming step.
+                error_step = NaN;
+                if stt.endedAt(p,'StartInterval',violation_times(k)) || ...
+                        stt.endedAt(p,'WaitForSecondPoke',violation_times(k))
+                    error_step = 2;
+                elseif stt.endedAt(p,'SecondPoke',violation_times(k)) || ...
+                        stt.endedAt(p,'WaitForThirdPoke',violation_times(k))
+                    error_step = 3;
+                end
+                if ~isempty(obj.wrong_poke_ports{k}) && isfinite(error_step)
+                    obj.error_count = obj.error_count + 1;
+                    obj.error_poke_ports{end+1} = obj.wrong_poke_ports{k};
+                    obj.error_poke_steps(end+1) = error_step;
+                end
+                if strcmp(obj.trial_phase,'B') && ~isempty(obj.wrong_poke_ports{k}) ...
+                        && isfinite(error_step) ...
                         && strcmp(obj.wrong_poke_ports{k}, ...
-                            obj.settings.sequence_A{obj.wrong_poke_steps(k)})
+                            obj.settings.sequence_A{error_step})
                     obj.a_consistent_error = true;
                 end
             end
@@ -228,7 +260,11 @@ classdef stt < proto.ProtoObj
                 obj.delivered_reward_ul = obj.reward;
                 obj.choice = obj.target_sequence{3};
             elseif isfinite(timeout_time)
-                obj.outcome = 'timeout';
+                if obj.trial_started
+                    obj.outcome = 'timeout';
+                else
+                    obj.outcome = 'no_start';
+                end
                 obj.hit = 0;
                 obj.viol = 0;
                 obj.reward = 0;
@@ -241,7 +277,7 @@ classdef stt < proto.ProtoObj
                 obj.reward = 0;
                 obj.choice = 'incomplete';
             end
-            obj.viol = double(obj.restart_count>0);
+            obj.viol = double(obj.error_count>0);
             obj.clean_hit = obj.hit==1 && obj.restart_count==0;
             t1 = stt.lastEntry(p,'StartInterval');
             t2 = stt.lastEntry(p,'SecondPoke');
@@ -255,14 +291,14 @@ classdef stt < proto.ProtoObj
             obj.violation_history(ndt) = obj.viol;
             obj.choice_history{ndt} = obj.choice;
             obj.RT_history(ndt) = obj.RT;
-            if strcmp(obj.trial_phase,'A')
+            if obj.trial_started && strcmp(obj.trial_phase,'A')
                 obj.a_completed_trials = obj.a_completed_trials + 1;
                 obj.a_hit_history(end+1) = obj.clean_hit;
                 if stt.shouldSwitch(obj.settings,obj.a_completed_trials,obj.a_hit_history)
                     obj.phase = 'B';
-                    obj.switch_after_trial = ndt;
+                    obj.switch_after_trial = obj.trial_number;
                 end
-            else
+            elseif obj.trial_started
                 obj.b_completed_trials = obj.b_completed_trials + 1;
             end
         end
@@ -273,12 +309,14 @@ classdef stt < proto.ProtoObj
                  'a_completed_trials';'b_completed_trials';'switch_after_trial';'trial_timing';'outcome'; ...
                  'violation_port';'violation_step';'timeout_state';'a_consistent_error'; ...
                  'restart_count';'wrong_poke_ports';'wrong_poke_steps';'clean_hit'; ...
+                 'trial_started';'trial_number';'counted_trials'; ...
+                 'error_count';'error_poke_ports';'error_poke_steps'; ...
                  'poke_times';'poke_types';'step_latency';'delivered_reward_ul'}];
         end
 
         function list = sessionPropertiesToSave(obj)
             list = [sessionPropertiesToSave@proto.ProtoObj(obj); ...
-                {'phase';'b_condition';'a_completed_trials';'b_completed_trials'; ...
+                {'phase';'b_condition';'a_completed_trials';'b_completed_trials';'counted_trials'; ...
                  'a_hit_history';'switch_after_trial'}];
         end
 

@@ -1,5 +1,28 @@
 # Sequence Transfer Task (STT) Bpod protocol
 
+## Unified shaping-to-training protocol
+
+Use [`stt_all.m`](./stt_all.m) for the shaping-to-training progression. Start it with `start_protocol('stt_all',subject_id,...)`; the MATLAB prompt lets you choose shaping or train. If you choose shaping, select the starting stage (1, 2, 3, or 4). With the default `advance_mode = 'performance'`, stage changes are decided **once at session end** and take effect in the **next session**: shaping 1 → 2 → 3 → 4 → training A. This treats one Bpod session per rat as one training day.
+
+The daily progression criterion is **rewarded counted trials / counted trials that day ≥ 95%**. Shaping 1 requires at least **200 counted trials**; shaping 2, 3, and 4 each require at least **100 counted trials** in that day's session. The fraction uses all counted trials in that session, not a recent window or trials pooled across days. Settings `performance_min_trials_stage1`, `performance_min_trials_later`, and `performance_threshold` can change these defaults. If the minimum or the threshold is not met, the next session repeats the same stage.
+
+In shaping 1, entry into `WaitForFirstPoke` (the state that turns on the `MidC` light) starts a counted trial. A run with no `MidC` poke times out after the default 30 s and counts as an unrewarded trial. In shaping 2–4, a counted trial begins only after the `MidC` start poke; a no-start timeout does not enter the performance denominator. `stage_trial_number` records the running denominator for each trial. The final `stage_performance` is computed at session end and saved with the session data. The first training session uses sequence A; A-to-B selection remains governed by the training settings. In `test=1` mode, Bpod does not persist the next-stage settings, so select the stage manually when starting a new test session.
+
+### Four-poke task in `stt_all.m`
+
+The first poke is always `MidC` at coordinate `(0,0)`. The other six task ports are `BotL=(-1,-1)`, `MidL=(-2,0)`, `TopL=(-1,1)`, `TopR=(1,1)`, `MidR=(2,0)`, and `BotR=(1,-1)`. These are task-design coordinates; verify the physical port layout on the rig. `BotC` is a separate water port and is **not** one of the four sequence pokes.
+
+| Condition | Four sequence pokes | Three displacement vectors |
+| --- | --- | --- |
+| A | `MidC → BotL → MidL → TopR` | `(-1,-1), (-1,1), (3,1)` |
+| B1 similar | `MidC → BotL → TopL → MidR` | `(-1,-1), (0,2), (3,-1)` |
+| B2 y-axis mirror | `MidC → BotR → MidR → TopL` | `(1,-1), (1,1), (-3,1)` |
+| B3 different | `MidC → TopL → BotR → MidR` | `(-1,1), (2,-2), (1,1)` |
+
+The A and B1 inputs are **three displacement vectors** accumulated from `(0,0)`; B2 reflects the resulting A port positions across the y-axis. For B3, the user supplied **three absolute target-port coordinates**, not displacement vectors. All three B3 peripheral ports differ from A's. For `stt_all.m`, shaping stage 1 teaches `MidC`; stage 2 adds `BotL`; stage 3 adds `MidL`; stage 4 adds `TopR`. After the final sequence poke, the rat must visit `BotC` to trigger water. In training, all four sequence LEDs illuminate initially and turn off in order after each correct poke. A wrong port restarts the sequence in the same state-machine run; errors at steps 2–4 are recorded. The session prompt offers A only, B only, or A-to-B switching, with B1/B2/B3 chosen separately.
+
+The rest of this README describes the **older standalone** [`stt.m`](./stt.m) training protocol. Its three-poke sequences are unchanged; start `stt_all` for the four-poke design above. Its trial-counting rule does not apply to shaping 1 in `stt_all.m`.
+
 [`stt.m`](./stt.m) implements a three-poke sequence task for rats. Every sequence begins at the center port (`MidC`). After the three sequence pokes, the rat must poke the separate reward port (`BotC`) to receive water. The port assignments and timings below are provisional and must be checked against the physical rig.
 
 ## Sequences
